@@ -2,10 +2,12 @@
 
 package org.syntax.stella.Absyn;
 
+import org.stella.typecheck.exception.TypeCheckException;
+
 public abstract class Program implements java.io.Serializable {
-  public abstract <R,A> R accept(Program.Visitor<R,A> v, A arg);
+  public abstract <R,A> R accept(Program.Visitor<R,A> v, A arg) throws TypeCheckException;
   public interface Visitor <R,A> {
-    public R visit(org.syntax.stella.Absyn.AProgram p, A arg);
+    public R visit(org.syntax.stella.Absyn.AProgram p, A arg) throws TypeCheckException;
 
   }
 

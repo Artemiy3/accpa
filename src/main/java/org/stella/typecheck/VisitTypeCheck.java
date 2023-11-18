@@ -2,7 +2,14 @@
 
 package org.stella.typecheck;
 
+import org.stella.typecheck.exception.FunctionDeclarationException;
+import org.stella.typecheck.exception.TypeCheckException;
 import org.syntax.stella.Absyn.*;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
 
 /*** Visitor Design Pattern Skeleton. ***/
 
@@ -14,10 +21,32 @@ import org.syntax.stella.Absyn.*;
 
 public class VisitTypeCheck
 {
+  ArrayList<String> functionNames = new ArrayList<>();
+
+  private void checkFunctionNames() throws TypeCheckException {
+    if (!functionNames.contains("main"))
+      throw FunctionDeclarationException.noMainMethod();
+
+    Set<String> namesSet = new HashSet<>();
+    String duplicate = null;
+
+    for (String name: functionNames) {
+      if (!namesSet.contains(name)) {
+        namesSet.add(name);
+      } else {
+        duplicate = name;
+        break;
+      }
+    }
+
+    if (duplicate != null)
+      throw FunctionDeclarationException.functionNameDuplicate(duplicate);
+  }
+
+
   public class ProgramVisitor<R,A> implements org.syntax.stella.Absyn.Program.Visitor<R,A>
   {
-    public R visit(org.syntax.stella.Absyn.AProgram p, A arg)
-    { /* Code for AProgram goes here */
+    public R visit(org.syntax.stella.Absyn.AProgram p, A arg) throws TypeCheckException { /* Code for AProgram goes here */
       p.languagedecl_.accept(new LanguageDeclVisitor<R,A>(), arg);
       for (org.syntax.stella.Absyn.Extension x: p.listextension_) {
         x.accept(new ExtensionVisitor<R,A>(), arg);
@@ -25,6 +54,9 @@ public class VisitTypeCheck
       for (org.syntax.stella.Absyn.Decl x: p.listdecl_) {
         x.accept(new DeclVisitor<R,A>(), arg);
       }
+
+      checkFunctionNames();
+
       return null;
     }
   }
@@ -49,10 +81,12 @@ public class VisitTypeCheck
   {
     public R visit(org.syntax.stella.Absyn.DeclFun p, A arg)
     { /* Code for DeclFun goes here */
+
+      functionNames.add(p.stellaident_); // add function name for checking
+
       for (org.syntax.stella.Absyn.Annotation x: p.listannotation_) {
         x.accept(new AnnotationVisitor<R,A>(), arg);
       }
-      //p.stellaident_;
       for (org.syntax.stella.Absyn.ParamDecl x: p.listparamdecl_) {
         x.accept(new ParamDeclVisitor<R,A>(), arg);
       }

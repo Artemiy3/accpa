@@ -3,6 +3,7 @@ package org.stella;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.*;
 import org.junit.jupiter.params.provider.*;
+import org.stella.typecheck.exception.TypeCheckException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import java.io.*;
@@ -50,7 +51,7 @@ class MainTest {
         System.setIn(fips);
 
         // Change Exception class to your specific
-        Exception exception = assertThrows(Exception.class, () -> Main.main(args), "Expected the type checker to fail!");
+        Exception exception = assertThrows(TypeCheckException.class, () -> Main.main(args), "Expected the type checker to fail!");
         System.out.println("Type Error: " + exception.getMessage());
     }
 }

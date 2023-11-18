@@ -4,6 +4,9 @@ import java.io.*;
 import org.antlr.v4.runtime.*;
 import org.antlr.v4.runtime.atn.*;
 import org.antlr.v4.runtime.dfa.*;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 import org.stella.typecheck.TypeCheck;
@@ -15,7 +18,6 @@ public class Main
 {
     stellaLexer l;
     stellaParser p;
-    int a;
 
     public Main(String[] args)
     {
