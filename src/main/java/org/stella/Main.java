@@ -15,6 +15,7 @@ public class Main
 {
     stellaLexer l;
     stellaParser p;
+    int a;
 
     public Main(String[] args)
     {
