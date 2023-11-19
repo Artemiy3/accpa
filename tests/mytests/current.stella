@@ -1,7 +1,7 @@
 // sample program in Stella Core
 language core;
 
-fn increment_twice(suc : Nat) -> Nat {
+fn increment_twice(n : Bool, m : Nat) -> Bool {
   return succ(succ(n));
 }
 
