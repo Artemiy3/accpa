@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.*;
 
 import org.stella.typecheck.TypeCheck;
+import org.stella.typecheck.exception.TypeCheckException;
 import org.syntax.stella.*;
 import org.syntax.stella.Absyn.*;
 import org.stella.eval.*;
@@ -53,7 +54,7 @@ public class Main
         return ast;
     }
 
-    public static void main(String args[]) throws Exception
+    public static void main(String[] args) throws Exception
     {
         Main t = new Main(args);
         try
@@ -61,19 +62,19 @@ public class Main
             Program ast = t.parse();
             TypeCheck.typecheckProgram(ast);
 
-            if (args.length > 0) {
-                stellaLexer l;
-                stellaParser p;
-                l = new stellaLexer(new ANTLRInputStream(new InputStreamReader(System.in)));
-                l.addErrorListener(new BNFCErrorListener());
-                p = new stellaParser(new CommonTokenStream(l));
-                p.addErrorListener(new BNFCErrorListener());
-                stellaParser.Start_ExprContext ec = p.start_Expr();
-                Expr inputExpr = ec.result;
-                Expr resultExpr = Eval.evalMainWith(ast, inputExpr);
-
-                System.out.println(PrettyPrinter.print(resultExpr));
-            }
+//            if (args.length > 0) {
+//                stellaLexer l;
+//                stellaParser p;
+//                l = new stellaLexer(new ANTLRInputStream(new InputStreamReader(System.in)));
+//                l.addErrorListener(new BNFCErrorListener());
+//                p = new stellaParser(new CommonTokenStream(l));
+//                p.addErrorListener(new BNFCErrorListener());
+//                stellaParser.Start_ExprContext ec = p.start_Expr();
+//                Expr inputExpr = ec.result;
+//                Expr resultExpr = Eval.evalMainWith(ast, inputExpr);
+//
+//                System.out.println(PrettyPrinter.print(resultExpr));
+//            }
         }
         catch(TestError e)
         {
@@ -81,6 +82,14 @@ public class Main
             System.err.println("     " + e.getMessage());
             System.exit(1);
         }
+        catch(TypeCheckException e)
+        {
+            System.err.println(e.getMessage());
+            e.printStackTrace(); // TODO: remove later
+            System.exit(2);
+        }
+
+        System.exit(0);
     }
 }
 

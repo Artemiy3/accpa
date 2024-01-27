@@ -22,4 +22,11 @@ public class FunctionDeclarationException extends TypeCheckException {
     public static FunctionDeclarationException noReturnType(String functionName) {
         return new FunctionDeclarationException("Function declaration \"" + functionName + "\" has no return type.");
     }
+
+    public static FunctionDeclarationException illegalParamsCount(String functionName, int paramsCount) {
+        return new FunctionDeclarationException(
+                "Illegal count of params in function \"" + functionName +
+                "\". Allowed count of params: 1, found: " + paramsCount
+        );
+    }
 }
