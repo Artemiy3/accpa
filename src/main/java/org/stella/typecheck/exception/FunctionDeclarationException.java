@@ -19,6 +19,11 @@ public class FunctionDeclarationException extends TypeCheckException {
                 + functionName + "\": " + paramName);
     }
 
+    public static FunctionDeclarationException paramNameDuplicatesFunctionName(String paramName, String functionName) {
+        return new FunctionDeclarationException("Parameter name duplicates existing function name in function \""
+                + functionName + "\": " + paramName);
+    }
+
     public static FunctionDeclarationException noReturnType(String functionName) {
         return new FunctionDeclarationException("Function declaration \"" + functionName + "\" has no return type.");
     }
