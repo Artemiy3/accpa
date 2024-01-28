@@ -34,18 +34,23 @@ public class VisitTypeCheck {
             Map<String, Type> accessibleVariables,
             ArrayList<FunctionInfo> accessibleFunctions,
             Optional<String> callingFunctionName,
-            Optional<List<Expr>> actualParams) {
+            Optional<List<List<Expr>>> actualParams,
+            Optional<Type> natRecType) {
 
         public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions) {
-            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.empty());
+            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.empty(), Optional.empty());
         }
 
         public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions, String callingFunctionName) {
-            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.of(callingFunctionName), Optional.empty());
+            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.of(callingFunctionName), Optional.empty(), Optional.empty());
         }
 
-        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions, List<Expr> actualParams) {
-            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.of(actualParams));
+        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions, List<List<Expr>> actualParams) {
+            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.of(actualParams), Optional.empty());
+        }
+
+        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions, Type natRecType) {
+            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.empty(), Optional.of(natRecType));
         }
     }
 
@@ -285,11 +290,11 @@ public class VisitTypeCheck {
     }
 
     public class TypeVisitor implements org.syntax.stella.Absyn.Type.Visitor<Optional<TypeCheckException>, TypeVisitorArgs> {
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.TypeFun p, TypeVisitorArgs arg) { /* Code for TypeFun goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.TypeFun p, TypeVisitorArgs args) { /* Code for TypeFun goes here */
             for (org.syntax.stella.Absyn.Type x : p.listtype_) {
-                x.accept(new TypeVisitor(), arg);
+                x.accept(new TypeVisitor(), args);
             }
-            p.type_.accept(new TypeVisitor(), arg);
+            p.type_.accept(new TypeVisitor(), args);
             return null;
         }
 
@@ -710,17 +715,27 @@ public class VisitTypeCheck {
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Application p, ExprVisitorArgs args) { /* Code for Application goes here */
-
             List<Expr> actualParameters = p.listexpr_;
 
-            ExprVisitorArgs newArgs = new ExprVisitorArgs(
-                    args.expectedType,
-                    args.functionName,
-                    args.accessibleVariables,
-                    args.accessibleFunctions,
-                    actualParameters);
+            if (args.actualParams.isPresent()) {
+                List<Expr> list = new ArrayList<>();
+                list.addAll(actualParameters);
+                args.actualParams.get().add(list);
 
-            return p.expr_.accept(new ExprVisitor(), newArgs);
+                return p.expr_.accept(new ExprVisitor(), args);
+            } else {
+                List<List<Expr>> actualParamsStorage = new ArrayList<>();
+                actualParamsStorage.add(actualParameters);
+
+                ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                        args.expectedType,
+                        args.functionName,
+                        args.accessibleVariables,
+                        args.accessibleFunctions,
+                        actualParamsStorage);
+
+                return p.expr_.accept(new ExprVisitor(), newArgs);
+            }
         }
 
         @Override
@@ -820,7 +835,7 @@ public class VisitTypeCheck {
                     args.accessibleFunctions,
                     functionName);
 
-            return p.expr_.accept(new ExprVisitor(), newArgs);
+            return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.LogicNot p, ExprVisitorArgs arg) { /* Code for LogicNot goes here */
@@ -843,11 +858,50 @@ public class VisitTypeCheck {
             return null;
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.NatRec p, ExprVisitorArgs arg) { /* Code for NatRec goes here */
-            p.expr_1.accept(new ExprVisitor(), arg);
-            p.expr_2.accept(new ExprVisitor(), arg);
-            p.expr_3.accept(new ExprVisitor(), arg);
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.NatRec p, ExprVisitorArgs args) { /* Code for NatRec goes here */
+            ExprVisitorArgs argsForCounter = new ExprVisitorArgs(
+                    new TypeNat(),
+                    args.functionName,
+                    args.accessibleVariables,
+                    args.accessibleFunctions,
+                    "Nat::rec"
+            );
+
+            ExprVisitorArgs initialValueArgs = new ExprVisitorArgs(
+                    args.expectedType,
+                    args.functionName,
+                    args.accessibleVariables,
+                    args.accessibleFunctions,
+                    "Nat::rec"
+            );
+
+            ListType inputNumber = new ListType();
+            inputNumber.add(new TypeNat());
+
+            ListType paramTypesList = new ListType();
+            paramTypesList.add(args.expectedType);
+
+            ExprVisitorArgs inputFunctionArgs = new ExprVisitorArgs(
+                    new TypeFun(inputNumber,
+                            new TypeFun(
+                                    paramTypesList,
+                                    args.expectedType
+                            )),
+                    args.functionName,
+                    args.accessibleVariables,
+                    args.accessibleFunctions,
+                    "Nat::rec"
+            );
+
+            Optional<TypeCheckException> wrongCounter = acceptNullable(p.expr_1, new ExprVisitor(), argsForCounter);
+            Optional<TypeCheckException> wrongInitialValue = acceptNullable(p.expr_2, new ExprVisitor(), initialValueArgs);
+            Optional<TypeCheckException> wrongFunction = acceptNullable(p.expr_3, new ExprVisitor(), inputFunctionArgs);
+
+            if (wrongCounter.isPresent())
+                return wrongCounter;
+            else if (wrongInitialValue.isPresent())
+                return wrongInitialValue;
+            else return wrongFunction;
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Fold p, ExprVisitorArgs arg) { /* Code for Fold goes here */
@@ -878,40 +932,75 @@ public class VisitTypeCheck {
             return null;
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.ConstInt p, ExprVisitorArgs arg) { /* Code for ConstInt goes here */
-            //p.integer_;
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.ConstInt p, ExprVisitorArgs args) { /* Code for ConstInt goes here */
+            int a = p.integer_;
+            if (a != 0)
+                return Optional.of(IllegalExpressionException.nonZeroInteger(args.functionName));
+            return checkExprType(args, new TypeNat());
         }
 
         public Optional<TypeCheckException> visit(ConstMemory p, ExprVisitorArgs arg) {
             return null;
         }
 
-        private Optional<TypeCheckException> checkAppliedFunction(String identifier, Type returnType, List<Type> paramTypes, ExprVisitorArgs args) {
-            Optional<TypeCheckException> typeException = checkExprType(args, returnType);
-            if (typeException.isPresent())
-                return typeException;
-
-            if (args.actualParams.isPresent() && args.actualParams.get().size() == 1) {
-                List<Expr> actualParams = args.actualParams.get();
-
-                for (int i = 0; i < actualParams.size(); i++) {
-                    ExprVisitorArgs argsForParameter = new ExprVisitorArgs(
-                            paramTypes.get(i),
-                            args.functionName,
-                            args.accessibleVariables,
-                            args.accessibleFunctions,
-                            identifier
-                    );
-                    Optional<TypeCheckException> result = actualParams.get(i).accept(new ExprVisitor(), argsForParameter);
-                    if (result.isPresent())
-                        return result;
-                }
-            } else {
-                return Optional.of(FunctionDeclarationException.illegalParamsCount(identifier, args.actualParams.map(List::size).orElse(0), false));
+        private Optional<TypeCheckException> checkParamsInAppliedFunction(String identifier, List<Type> expected, List<Expr> actualParams, ExprVisitorArgs args) {
+            for (int j = 0; j < actualParams.size(); j++) {
+                ExprVisitorArgs argsForParameter = new ExprVisitorArgs(
+                        expected.get(j),
+                        args.functionName,
+                        args.accessibleVariables,
+                        args.accessibleFunctions,
+                        identifier
+                );
+                Optional<TypeCheckException> result = actualParams.get(j).accept(new ExprVisitor(), argsForParameter);
+                if (result.isPresent())
+                    return result;
             }
 
             return Optional.empty();
+        }
+
+        private Optional<TypeCheckException> checkAppliedFunction(String identifier, Type returnType, List<Type> paramTypes, ExprVisitorArgs args) {
+
+            if (args.actualParams == null || args.actualParams.isEmpty() || args.actualParams.get().isEmpty()) {
+                ListType params = new ListType();
+                params.addAll(paramTypes);
+                return checkExprType(args, new TypeFun(params, returnType));
+            }
+
+            if (args.actualParams.isPresent()) { //  && args.actualParams.get().size() == 1
+                List<List<Expr>> paramsStorage = args.actualParams.get();
+
+                List<Type> currentParamTypes;
+                Type currentReturnType = null;
+
+                for (int i = paramsStorage.size() - 1; i >= 0; i--) {
+                    List<Expr> actualParams = paramsStorage.get(i);
+
+                    if (i == paramsStorage.size() - 1) {
+                        Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, paramTypes, actualParams, args);
+                        if (result.isPresent())
+                            return result;
+
+                        currentReturnType = returnType;
+                    } else {
+                        if (currentReturnType instanceof TypeFun typeFun) {
+                            currentParamTypes = typeFun.listtype_;
+                            currentReturnType = typeFun.type_;
+                        } else {
+                            return Optional.of(TypeMismatchException.wrongType(args.functionName, new TypeFun(null, null), currentReturnType));
+                        }
+
+                        Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, currentParamTypes, actualParams, args);
+                        if (result.isPresent())
+                            return result;
+                    }
+                }
+
+                return checkExprType(args, currentReturnType);
+            } else {
+                return Optional.of(FunctionDeclarationException.illegalParamsCount(identifier, args.actualParams.map(List::size).orElse(0), false));
+            }
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Var p, ExprVisitorArgs args) { /* Code for Var goes here */
