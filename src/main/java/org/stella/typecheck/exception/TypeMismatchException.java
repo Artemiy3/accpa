@@ -11,6 +11,10 @@ public class TypeMismatchException extends TypeCheckException {
         return new TypeMismatchException("Type mismatch in function \"" + functionName + "\": expected: " + expected.getClass().getSimpleName() + ", got: " + actual.getClass().getSimpleName());
     }
 
+    public static TypeMismatchException unexpectedAbstraction(String functionName, Type expected) {
+        return new TypeMismatchException("Type mismatch in function \"" + functionName + "\": expected: " + expected.getClass().getSimpleName() + ", got: anonymous function");
+    }
+
     public static TypeMismatchException invalidArgumentType(String parentFunctionName, String calledFunctionName, Type expected, Type actual) {
         return new TypeMismatchException("Type mismatch in function \"" + parentFunctionName + "\": calling function \"" + calledFunctionName + "\" with argument of type " + actual.getClass().getSimpleName() + ", but \"" + calledFunctionName + "\" accepts type " + expected.getClass().getSimpleName());
     }
