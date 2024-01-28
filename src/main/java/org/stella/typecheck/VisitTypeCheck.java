@@ -54,8 +54,12 @@ public class VisitTypeCheck {
         }
     }
 
-    public record ParamDeclVisitorArgs(String functionName, List<FunctionParameter> params,
+    public record ParamDeclVisitorArgs(Optional<Type> expectedType, String functionName, List<FunctionParameter> params,
                                        List<String> functionNames, boolean isAnonymousFunction) {
+        public ParamDeclVisitorArgs(String functionName, List<FunctionParameter> params,
+                                    List<String> functionNames, boolean isAnonymousFunction) {
+            this(Optional.empty(), functionName, params, functionNames, isAnonymousFunction);
+        }
     }
 
     private Optional<TypeCheckException> checkExprType(ExprVisitorArgs args, Type type) {
@@ -120,7 +124,7 @@ public class VisitTypeCheck {
     private static Optional<TypeCheckException> acceptNullable(Expr expr, ExprVisitor visitor, ExprVisitorArgs args) {
         Optional<TypeCheckException> nullableResult = expr.accept(visitor, args);
         if (nullableResult == null)
-            return Optional.of(NotSupportedExpressionException.unknownExpression(expr));
+            return Optional.of(NotSupportedException.unknownExpression(expr));
         else
             return nullableResult;
     }
@@ -260,7 +264,14 @@ public class VisitTypeCheck {
                     args.functionNames,
                     args.isAnonymousFunction
             );
-            //p.type_.accept(new TypeVisitor(), null);
+
+            if (args.expectedType.isPresent()) {
+                Optional<TypeCheckException> result = p.type_.accept(new TypeVisitor(), new TypeVisitorArgs(args.expectedType.get(), args.functionName));
+                if (result == null)
+                    return Optional.of(NotSupportedException.unknownType(p.type_));
+                return result;
+            }
+
             return e;
         }
     }
@@ -348,8 +359,13 @@ public class VisitTypeCheck {
             return Optional.empty();
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.TypeNat p, TypeVisitorArgs arg) { /* Code for TypeNat goes here */
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.TypeNat p, TypeVisitorArgs args) { /* Code for TypeNat goes here */
+            return checkExprType(new ExprVisitorArgs(
+                            args.expectedType,
+                            args.functionName,
+                            null,
+                            null),
+                    p);
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.TypeUnit p, TypeVisitorArgs arg) { /* Code for TypeUnit goes here */
@@ -523,8 +539,8 @@ public class VisitTypeCheck {
                     args.accessibleFunctions
             );
             Optional<TypeCheckException> wrongCond = acceptNullable(p.expr_1, new ExprVisitor(), conditionArgs);
-            Optional<TypeCheckException> wrongArg1 = acceptNullable(p.expr_2, new ExprVisitor(), conditionArgs);
-            Optional<TypeCheckException> wrongArg2 = acceptNullable(p.expr_3, new ExprVisitor(), conditionArgs);
+            Optional<TypeCheckException> wrongArg1 = acceptNullable(p.expr_2, new ExprVisitor(), args);
+            Optional<TypeCheckException> wrongArg2 = acceptNullable(p.expr_3, new ExprVisitor(), args);
 
             if (wrongCond.isPresent())
                 return wrongCond;
@@ -605,48 +621,48 @@ public class VisitTypeCheck {
             if (p.listparamdecl_.size() != 1)
                 return Optional.of(FunctionDeclarationException.illegalParamsCount(args.functionName, p.listparamdecl_.size(), true));
 
-            if (args.expectedType instanceof TypeFun) {
-
-                List<FunctionParameter> accessibleParams = new ArrayList<>(args
-                        .accessibleVariables
-                        .entrySet()
-                        .stream()
-                        .map(entry -> new FunctionParameter(entry.getKey(), entry.getValue()))
-                        .toList());
-                for (org.syntax.stella.Absyn.ParamDecl x : p.listparamdecl_) {
-                    Optional<TypeCheckException> paramResult = x.accept(new ParamDeclVisitor(), new ParamDeclVisitorArgs(
-                            args.functionName,
-                            accessibleParams,
-                            args.accessibleFunctions.stream().map(f -> f.name).toList(),
-                            true));
-                    if (paramResult.isPresent())
-                        return paramResult;
-                }
-
-                TypeFun expectedType = (TypeFun) args.expectedType;
-                Type returnType = expectedType.type_;
-                Map<String, Type> extendedVariables = new HashMap<>(args.accessibleVariables);
-                extendedVariables.putAll(
-                        accessibleParams
-                                .stream()
-                                .collect(
-                                        Collectors.toMap(param -> param.identifier, param -> param.type)
-                                )
-                );
-                ExprVisitorArgs newArgs = new ExprVisitorArgs(
-                        returnType,
-                        args.functionName,
-                        extendedVariables,
-                        args.accessibleFunctions
-                );
-                Optional<TypeCheckException> result = acceptNullable(p.expr_, new ExprVisitor(), newArgs);
-                if (result.isPresent())
-                    return result;
-            } else {
+            if (!(args.expectedType instanceof TypeFun)) {
                 return Optional.of(TypeMismatchException.unexpectedAbstraction(args.functionName, args.expectedType));
             }
 
-            return Optional.empty();
+            TypeFun expectedType = (TypeFun) args.expectedType;
+
+            List<Type> expectedParamTypes = expectedType.listtype_;
+
+            List<FunctionParameter> accessibleParams = new ArrayList<>(args
+                    .accessibleVariables
+                    .entrySet()
+                    .stream()
+                    .map(entry -> new FunctionParameter(entry.getKey(), entry.getValue()))
+                    .toList());
+            for (int i = 0; i < p.listparamdecl_.size(); i++) {
+                Optional<TypeCheckException> paramResult = p.listparamdecl_.get(i).accept(new ParamDeclVisitor(), new ParamDeclVisitorArgs(
+                        Optional.of(expectedParamTypes.get(i)),
+                        args.functionName,
+                        accessibleParams,
+                        args.accessibleFunctions.stream().map(f -> f.name).toList(),
+                        true));
+                if (paramResult.isPresent())
+                    return paramResult;
+            }
+
+            Type returnType = expectedType.type_;
+            Map<String, Type> extendedVariables = new HashMap<>(args.accessibleVariables);
+            extendedVariables.putAll(
+                    accessibleParams
+                            .stream()
+                            .collect(
+                                    Collectors.toMap(param -> param.identifier, param -> param.type)
+                            )
+            );
+            ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                    returnType,
+                    args.functionName,
+                    extendedVariables,
+                    args.accessibleFunctions
+            );
+
+            return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Variant p, ExprVisitorArgs arg) { /* Code for Variant goes here */
@@ -716,6 +732,10 @@ public class VisitTypeCheck {
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Application p, ExprVisitorArgs args) { /* Code for Application goes here */
             List<Expr> actualParameters = p.listexpr_;
+
+            if (!(p.expr_ instanceof Var) && !(p.expr_ instanceof Application)) {
+                return Optional.of(IllegalExpressionException.paramsToNonFunction(args.functionName, p.expr_.getClass().getSimpleName()));
+            }
 
             if (args.actualParams.isPresent()) {
                 List<Expr> list = new ArrayList<>();
@@ -829,7 +849,8 @@ public class VisitTypeCheck {
             if (exprTypeException.isPresent())
                 return exprTypeException;
 
-            ExprVisitorArgs newArgs = new ExprVisitorArgs(typeNat,
+            ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                    typeNat,
                     args.functionName,
                     args.accessibleVariables,
                     args.accessibleFunctions,
@@ -1009,13 +1030,14 @@ public class VisitTypeCheck {
             if (args.accessibleVariables.containsKey(identifier)) {
                 Type variableType = args.accessibleVariables.get(identifier);
                 if (variableType instanceof TypeFun) {
-                    System.out.println("YES!"); // TODO: finish
                     TypeFun typeFun = (TypeFun) variableType;
                     Type returnType = typeFun.type_;
                     List<Type> paramTypes = typeFun.listtype_;
                     return checkAppliedFunction(identifier, returnType, paramTypes, args);
 
                 } else {
+                    if (args.actualParams.isPresent())
+                        return Optional.of(IllegalExpressionException.paramsToNonFunction(args.functionName, identifier));
                     return checkExprType(args, variableType);
                 }
             } else {
