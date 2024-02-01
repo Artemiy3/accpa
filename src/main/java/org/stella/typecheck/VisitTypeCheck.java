@@ -19,6 +19,8 @@ import java.util.stream.Collectors;
 
 public class VisitTypeCheck {
 
+    private final Set<String> extensions = new HashSet<>();
+
     public record FunctionParameter(String identifier, Type type) {
     }
 
@@ -62,14 +64,35 @@ public class VisitTypeCheck {
         }
     }
 
-    private Optional<TypeCheckException> checkExprType(ExprVisitorArgs args, Type type) {
-        if (!args.expectedType.equals(type)) {
-            if (args.callingFunctionName.isPresent()) {
-                return Optional.of(TypeMismatchException.invalidArgumentType(args.functionName, args.callingFunctionName.get(), args.expectedType, type));
-            } else {
-                return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, type));
-            }
+    private Optional<TypeCheckException> getTypeMismatchException(ExprVisitorArgs args, Type type) {
+        if (args.callingFunctionName.isPresent()) {
+            return Optional.of(TypeMismatchException.invalidArgumentType(args.functionName, args.callingFunctionName.get(), args.expectedType, type));
+        } else {
+            return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, type));
         }
+    }
+
+    private Optional<TypeCheckException> checkExprType(ExprVisitorArgs args, Type type) {
+        if ((type instanceof TypeTuple) && (args.expectedType instanceof TypeTuple)) {
+            ListType expectedList = ((TypeTuple) args.expectedType).listtype_;
+            ListType actualList = ((TypeTuple) type).listtype_;
+            for (int i = 0; i < expectedList.size(); i++) {
+                if (expectedList.get(i) == null)
+                    continue;
+                if (!expectedList.get(i).equals(actualList.get(i))) {
+                    return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, type));
+                }
+            }
+        } else if (!args.expectedType.equals(type)) {
+            return getTypeMismatchException(args, type);
+        }
+
+        return Optional.empty();
+    }
+
+    private Optional<TypeCheckException> compareTypes(TypeVisitorArgs args, Type type) {
+        if (!args.expectedType.equals(type))
+            return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, type));
 
         return Optional.empty();
     }
@@ -122,6 +145,8 @@ public class VisitTypeCheck {
     }
 
     private static Optional<TypeCheckException> acceptNullable(Expr expr, ExprVisitor visitor, ExprVisitorArgs args) {
+        if (args.expectedType == null)
+            return Optional.empty();
         Optional<TypeCheckException> nullableResult = expr.accept(visitor, args);
         if (nullableResult == null)
             return Optional.of(NotSupportedException.unknownExpression(expr));
@@ -129,12 +154,19 @@ public class VisitTypeCheck {
             return nullableResult;
     }
 
+    private Optional<TypeCheckException> checkExtension(String requiredExtension, Type type, ExprVisitorArgs args) {
+        if (!extensions.contains(requiredExtension)) {
+            return Optional.of(MissingExtensionException.noExtensionForType(args.functionName, requiredExtension, type));
+        }
+        return Optional.empty();
+    }
+
     public class ProgramVisitor<A> implements org.syntax.stella.Absyn.Program.Visitor<Optional<TypeCheckException>, A> {
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.AProgram p, A arg) { /* Code for AProgram goes here */
 //      p.languagedecl_.accept(new LanguageDeclVisitor<R,A>(), arg);
-//      for (org.syntax.stella.Absyn.Extension x: p.listextension_) {
-//        x.accept(new ExtensionVisitor<R,A>(), arg);
-//      }
+            for (org.syntax.stella.Absyn.Extension x : p.listextension_) {
+                x.accept(new ExtensionVisitor(), arg);
+            }
 
             ArrayList<FunctionInfo> functions = new ArrayList<>();
             for (org.syntax.stella.Absyn.Decl x : p.listdecl_) {
@@ -160,11 +192,10 @@ public class VisitTypeCheck {
         }
     }
 
-    public class ExtensionVisitor<R, A> implements org.syntax.stella.Absyn.Extension.Visitor<R, A> {
-        public R visit(org.syntax.stella.Absyn.AnExtension p, A arg) { /* Code for AnExtension goes here */
-            for (String x : p.listextensionname_) {
-                //x;
-            }
+    public class ExtensionVisitor implements org.syntax.stella.Absyn.Extension.Visitor {
+        @Override
+        public Object visit(AnExtension p, Object arg) {
+            extensions.addAll(p.listextensionname_);
             return null;
         }
     }
@@ -769,17 +800,73 @@ public class VisitTypeCheck {
             return null;
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.DotTuple p, ExprVisitorArgs arg) { /* Code for DotTuple goes here */
-            p.expr_.accept(new ExprVisitor(), arg);
-            //p.integer_;
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.DotTuple p, ExprVisitorArgs args) { /* Code for DotTuple goes here */
+            int dotTupleInt = p.integer_;
+
+            if (dotTupleInt < 1 || dotTupleInt > 2) {
+                return Optional.of(IllegalExpressionException.pairOutOfBounds(args.functionName(), dotTupleInt));
+            } else {
+                if ((p.expr_ instanceof Tuple) ||
+                        (p.expr_ instanceof Var) ||
+                        (p.expr_ instanceof Application) ||
+                        (p.expr_ instanceof DotTuple)) {
+
+                    ListType tupleTypes = new ListType();
+
+                    if (dotTupleInt == 1) {
+                        tupleTypes.add(args.expectedType);
+                        tupleTypes.add(null);
+                    } else {
+                        tupleTypes.add(null);
+                        tupleTypes.add(args.expectedType);
+                    }
+
+                    Type typeTuple = new TypeTuple(tupleTypes);
+                    ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                            typeTuple,
+                            args.functionName,
+                            args.accessibleVariables,
+                            args.accessibleFunctions
+                    );
+
+                    return p.expr_.accept(new ExprVisitor(), newArgs);
+                } else {
+                    return Optional.of(IllegalExpressionException.nonTupleDotCall(args.functionName));
+                }
+            }
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Tuple p, ExprVisitorArgs arg) { /* Code for Tuple goes here */
-            for (org.syntax.stella.Absyn.Expr x : p.listexpr_) {
-                x.accept(new ExprVisitor(), arg);
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Tuple p, ExprVisitorArgs args) { /* Code for Tuple goes here */
+            Type typeTuple = new TypeTuple(new ListType());
+
+            Optional<TypeCheckException> extensionProblem = checkExtension("#pairs", typeTuple, args);
+            if (extensionProblem.isPresent())
+                return extensionProblem;
+
+            if (p.listexpr_.size() != 2) {
+                return Optional.of(IllegalExpressionException.illegalTupleParamsCount(args.functionName, p.listexpr_.size()));
             }
-            return null;
+
+            if (args.expectedType instanceof TypeTuple) {
+                TypeTuple expectedTuple = (TypeTuple) args.expectedType;
+                for (int i = 0; i < p.listexpr_.size(); i++) {
+                    Type expectedType = expectedTuple.listtype_.get(i);
+                    ExprVisitorArgs memberArgs = new ExprVisitorArgs(
+                            expectedType,
+                            args.functionName,
+                            args.accessibleVariables,
+                            args.accessibleFunctions
+                    );
+                    Optional<TypeCheckException> result = acceptNullable(p.listexpr_.get(i), new ExprVisitor(), memberArgs);
+                    if (result.isPresent())
+                        return result;
+                }
+
+            } else {
+                return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, typeTuple));
+            }
+
+            return Optional.empty();
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Record p, ExprVisitorArgs arg) { /* Code for Record goes here */
@@ -949,8 +1036,14 @@ public class VisitTypeCheck {
             return checkExprType(args, typeBool);
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.ConstUnit p, ExprVisitorArgs arg) { /* Code for ConstUnit goes here */
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.ConstUnit p, ExprVisitorArgs args) { /* Code for ConstUnit goes here */
+            TypeUnit typeUnit = new TypeUnit();
+
+            Optional<TypeCheckException> checked = checkExtension("#unit-type", typeUnit, args);
+            if (checked.isPresent())
+                return checked;
+
+            return checkExprType(args, typeUnit);
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.ConstInt p, ExprVisitorArgs args) { /* Code for ConstInt goes here */
@@ -989,39 +1082,35 @@ public class VisitTypeCheck {
                 return checkExprType(args, new TypeFun(params, returnType));
             }
 
-            if (args.actualParams.isPresent()) { //  && args.actualParams.get().size() == 1
-                List<List<Expr>> paramsStorage = args.actualParams.get();
+            List<List<Expr>> paramsStorage = args.actualParams.get();
 
-                List<Type> currentParamTypes;
-                Type currentReturnType = null;
+            List<Type> currentParamTypes;
+            Type currentReturnType = null;
 
-                for (int i = paramsStorage.size() - 1; i >= 0; i--) {
-                    List<Expr> actualParams = paramsStorage.get(i);
+            for (int i = paramsStorage.size() - 1; i >= 0; i--) {
+                List<Expr> actualParams = paramsStorage.get(i);
 
-                    if (i == paramsStorage.size() - 1) {
-                        Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, paramTypes, actualParams, args);
-                        if (result.isPresent())
-                            return result;
+                if (i == paramsStorage.size() - 1) {
+                    Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, paramTypes, actualParams, args);
+                    if (result.isPresent())
+                        return result;
 
-                        currentReturnType = returnType;
+                    currentReturnType = returnType;
+                } else {
+                    if (currentReturnType instanceof TypeFun typeFun) {
+                        currentParamTypes = typeFun.listtype_;
+                        currentReturnType = typeFun.type_;
                     } else {
-                        if (currentReturnType instanceof TypeFun typeFun) {
-                            currentParamTypes = typeFun.listtype_;
-                            currentReturnType = typeFun.type_;
-                        } else {
-                            return Optional.of(TypeMismatchException.wrongType(args.functionName, new TypeFun(null, null), currentReturnType));
-                        }
-
-                        Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, currentParamTypes, actualParams, args);
-                        if (result.isPresent())
-                            return result;
+                        return Optional.of(TypeMismatchException.wrongType(args.functionName, new TypeFun(null, null), currentReturnType));
                     }
-                }
 
-                return checkExprType(args, currentReturnType);
-            } else {
-                return Optional.of(FunctionDeclarationException.illegalParamsCount(identifier, args.actualParams.map(List::size).orElse(0), false));
+                    Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, currentParamTypes, actualParams, args);
+                    if (result.isPresent())
+                        return result;
+                }
             }
+
+            return checkExprType(args, currentReturnType);
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Var p, ExprVisitorArgs args) { /* Code for Var goes here */
@@ -1050,30 +1139,6 @@ public class VisitTypeCheck {
                             appliedFunction.returnType,
                             appliedFunction.params.stream().map(param -> param.type).toList(),
                             args);
-
-//                    Optional<TypeCheckException> typeException = checkExprType(args, appliedFunction.returnType);
-//                    if (typeException.isPresent())
-//                        return typeException;
-//
-//
-//                    if (args.actualParams.isPresent() && args.actualParams.get().size() == 1) {
-//                        List<Expr> actualParams = args.actualParams.get();
-//
-//                        for (int i = 0; i < actualParams.size(); i++) {
-//                            ExprVisitorArgs argsForParameter = new ExprVisitorArgs(
-//                                    appliedFunction.params.get(i).type,
-//                                    args.functionName,
-//                                    args.accessibleVariables,
-//                                    args.accessibleFunctions,
-//                                    identifier
-//                            );
-//                            Optional<TypeCheckException> result = actualParams.get(i).accept(new ExprVisitor(), argsForParameter);
-//                            if (result.isPresent())
-//                                return result;
-//                        }
-//                    } else {
-//                        return Optional.of(FunctionDeclarationException.illegalParamsCount(identifier, args.actualParams.map(List::size).orElse(0), false));
-//                    }
                 } else {
                     return Optional.of(UnknownIdentifierException.unknownVariable(identifier, args.functionName));
                 }
