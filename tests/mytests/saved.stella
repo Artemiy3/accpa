@@ -1,0 +1,103 @@
+// sample program in Stella Core
+//language core;
+
+//fn bool::not(m : Bool) -> Bool {
+//  return if m then false else true;
+//}
+
+//fn twice(f : fn(Bool) -> Bool) -> (fn(Bool) -> Bool) {
+//  return fn (x : Bool) { return f(f(x)) }
+//}
+
+//fn increment_twice(num : Nat) -> Nat {
+//  return succ(succ(0));
+//}
+
+//fn main(n : Bool) -> Nat {
+//  return Nat::rec(0, n, fn (t : Bool) { return t }); //increment_twice(increment_twice(n));
+//}
+
+language core;
+
+// a constant function, specialized to Nat
+fn Nat2Nat::const(f : fn(Nat) -> Nat) -> (fn(Nat) -> (fn(Nat) -> Nat)) {
+  return fn(x : Nat) { return f; };
+}
+
+// addition of natural numbers
+fn Nat::add(n : Nat) -> (fn(Nat) -> Nat) {
+  return fn(m : Nat) {
+    return Nat::rec(n, m, fn(i : Nat) {
+      return fn(r : Nat) { return succ(r); }; });
+  };
+}
+
+// multiplication of natural numbers
+fn Nat::mul(n : Nat) -> (fn(Nat) -> Nat) {
+  return fn(m : Nat) {
+    return Nat::rec(n, 0, Nat2Nat::const(Nat::add(m)));
+  };
+}
+
+// factorial via primitive recursion
+fn factorial(n : Nat) -> Nat {
+  return Nat::rec(n, succ(0), fn(i : Nat) {
+    return fn(r : Nat) {
+    return Nat::mul(r)(true); //(succ(i));  // r := r * (i + 1)
+  }; });
+}
+
+fn main(n : Nat) -> Nat {
+  return factorial(n);
+}
+
+language core;
+extend with #pairs, #arithmetic-operators;
+
+fn add(t : {Nat, Nat}) -> Nat {
+  return t.1 + t.2
+}
+
+fn main(n : Nat) -> Nat {
+  return {succ(n), {succ(succ(n)), n}}.2.1
+}
+
+fn ignore(_ : Nat) -> Unit {
+  return unit
+}
+
+fn main(n : Nat) -> Nat {
+  return ignore(n)
+}
+
+language core;
+
+extend with #sum-types, #unit-type, #pairs;
+
+fn test(first : Bool) -> Nat + Unit {
+  return if first then inl(succ(0)) else inr(unit)
+}
+
+fn test1(first : Bool) -> Nat + (Bool + Unit) {
+  return if first then inl(succ(0)) else inr(inr(unit))
+}
+
+fn f(n : Nat) -> fn(Bool) -> {Unit, fn(Bool) -> {Nat, Nat + (Bool + Unit)}} {
+  return fn(k : Bool) { return {unit, fn(m : Bool) { return {succ(succ(n)), inr(inl(m))} }} }
+}
+
+fn main(input : Bool) -> Nat {
+  return match f(succ(0))(true).2(input).2 {
+      inl(n) => n
+    | inr(inl(k)) => if k then 0 else succ(0)
+    | inr(inr(k)) => 0
+  }
+}
+
+//fn main(input : Bool) -> Nat {
+//  return match test1(input) {
+//      inl(n) => n
+//    | inr(inl(k)) => if k then 0 else succ(0)
+//  }
+//}
+

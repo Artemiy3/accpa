@@ -1,10 +1,23 @@
 language core;
-extend with #pairs, #arithmetic-operators;
 
-fn add(t : {Nat, Nat}) -> Nat {
-  return t.1
+extend with #sum-types, #unit-type, #pairs;
+
+fn test(first : Bool) -> Nat + Unit {
+  return if first then inl(succ(0)) else inr(unit)
 }
 
-fn main(n : Nat) -> Nat {
-  return {succ(n), {succ(succ(n)), n}}.2.1
+fn test1(first : Bool) -> Nat + (Bool + Unit) {
+  return if first then inl(succ(0)) else inr(inr(unit))
+}
+
+fn f(n : Nat) -> fn(Bool) -> {Unit, fn(Bool) -> {Nat, Nat + (Bool + Unit)}} {
+  return fn(k : Bool) { return {unit, fn(m : Bool) { return {succ(succ(n)), inr(inl(m))} }} }
+}
+
+fn main(input : Bool) -> Nat {
+  return match f(succ(0))(true).2(input).2 {
+      inl(n) => n
+    | inr(inl(k)) => if k then 0 else succ(0)
+    | inr(inr(k)) => 0
+  }
 }

@@ -6,6 +6,7 @@ import org.junit.jupiter.params.provider.*;
 import org.stella.typecheck.exception.TypeCheckException;
 
 import static org.junit.jupiter.api.Assertions.*;
+
 import java.io.*;
 
 class MainTest {
@@ -23,7 +24,7 @@ class MainTest {
         final InputStream original = System.in;
         final FileInputStream fips = new FileInputStream(filepath);
         System.setIn(fips);
-        Assertions.assertDoesNotThrow(() -> Main.main(args));
+        assertDoesNotThrow(() -> Main.main(args));
         System.setIn(original);
     }
 

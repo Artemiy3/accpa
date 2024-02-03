@@ -1,6 +1,7 @@
 package org.stella;
 
 import java.io.*;
+
 import org.antlr.v4.runtime.*;
 import org.antlr.v4.runtime.atn.*;
 import org.antlr.v4.runtime.dfa.*;
@@ -15,23 +16,19 @@ import org.syntax.stella.*;
 import org.syntax.stella.Absyn.*;
 import org.stella.eval.*;
 
-public class Main
-{
+public class Main {
     stellaLexer l;
     stellaParser p;
 
-    public Main(String[] args)
-    {
-        try
-        {
+    ///Users/artkochergin/ideaProjects/accpa/tests/mytests/current.stella
+    public Main(String[] args) {
+        try {
             Reader input;
             if (args.length == 0) input = new InputStreamReader(System.in);
             else input = new FileReader(args[0]);
             l = new stellaLexer(new ANTLRInputStream(input));
             l.addErrorListener(new BNFCErrorListener());
-        }
-        catch(IOException e)
-        {
+        } catch (IOException e) {
             System.err.println("Error: File not found: " + args[0]);
             System.exit(1);
         }
@@ -39,8 +36,7 @@ public class Main
         p.addErrorListener(new BNFCErrorListener());
     }
 
-    public Program parse() throws Exception
-    {
+    public Program parse() throws Exception {
         /* The default parser is the first-defined entry point. */
         /* Other options are: */
     /* languageDecl, extension, listExtensionName, listExtension, decl,
@@ -54,11 +50,9 @@ public class Main
         return ast;
     }
 
-    public static void main(String[] args) throws Exception
-    {
+    public static void main(String[] args) throws Exception {
         Main t = new Main(args);
-        try
-        {
+        try {
             Program ast = t.parse();
             TypeCheck.typecheckProgram(ast);
 
@@ -75,17 +69,13 @@ public class Main
 //
 //                System.out.println(PrettyPrinter.print(resultExpr));
 //            }
-        }
-        catch(TestError e)
-        {
+        } catch (TestError e) {
             System.err.println("At line " + e.line + ", column " + e.column + " :");
             System.err.println("     " + e.getMessage());
             System.exit(1);
-        }
-        catch(TypeCheckException e)
-        {
+        } catch (TypeCheckException e) {
             System.err.println(e.getMessage());
-            e.printStackTrace(); // TODO: remove later
+            //e.printStackTrace();
             System.exit(2);
         }
 
@@ -93,37 +83,34 @@ public class Main
     }
 }
 
-class TestError extends RuntimeException
-{
+class TestError extends RuntimeException {
     int line;
     int column;
-    public TestError(String msg, int l, int c)
-    {
+
+    public TestError(String msg, int l, int c) {
         super(msg);
         line = l;
         column = c;
     }
 }
 
-class BNFCErrorListener implements ANTLRErrorListener
-{
+class BNFCErrorListener implements ANTLRErrorListener {
     @Override
-    public void syntaxError(Recognizer<?, ?> recognizer, Object o, int i, int i1, String s, RecognitionException e)
-    {
-        throw new TestError(s,i,i1);
+    public void syntaxError(Recognizer<?, ?> recognizer, Object o, int i, int i1, String s, RecognitionException e) {
+        throw new TestError(s, i, i1);
     }
+
     @Override
-    public void reportAmbiguity(Parser parser, DFA dfa, int i, int i1, boolean b, BitSet bitSet, ATNConfigSet atnConfigSet)
-    {
-        throw new TestError("Ambiguity at",i,i1);
+    public void reportAmbiguity(Parser parser, DFA dfa, int i, int i1, boolean b, BitSet bitSet, ATNConfigSet atnConfigSet) {
+        throw new TestError("Ambiguity at", i, i1);
     }
+
     @Override
-    public void reportAttemptingFullContext(Parser parser, DFA dfa, int i, int i1, BitSet bitSet, ATNConfigSet atnConfigSet)
-    {
+    public void reportAttemptingFullContext(Parser parser, DFA dfa, int i, int i1, BitSet bitSet, ATNConfigSet atnConfigSet) {
     }
+
     @Override
-    public void reportContextSensitivity(Parser parser, DFA dfa, int i, int i1, int i2, ATNConfigSet atnConfigSet)
-    {
+    public void reportContextSensitivity(Parser parser, DFA dfa, int i, int i1, int i2, ATNConfigSet atnConfigSet) {
     }
 }
 

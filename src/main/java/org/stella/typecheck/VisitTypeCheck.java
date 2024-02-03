@@ -34,26 +34,37 @@ public class VisitTypeCheck {
             Type expectedType,
             String functionName,
             Map<String, Type> accessibleVariables,
-            ArrayList<FunctionInfo> accessibleFunctions,
+            List<FunctionInfo> accessibleFunctions,
+            Stack<Operation> operations,
             Optional<String> callingFunctionName,
-            Optional<List<List<Expr>>> actualParams,
             Optional<Type> natRecType) {
 
-        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions) {
-            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.empty(), Optional.empty());
+        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, List<FunctionInfo> accessibleFunctions, Stack<Operation> operations) {
+            this(expectedType, functionName, accessibleVariables, accessibleFunctions, operations, Optional.empty(), Optional.empty());
         }
 
-        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions, String callingFunctionName) {
-            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.of(callingFunctionName), Optional.empty(), Optional.empty());
+        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, List<FunctionInfo> accessibleFunctions, Stack<Operation> operations, String callingFunctionName) {
+            this(expectedType, functionName, accessibleVariables, accessibleFunctions, operations, Optional.of(callingFunctionName), Optional.empty());
         }
 
-        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions, List<List<Expr>> actualParams) {
-            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.of(actualParams), Optional.empty());
+        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, List<FunctionInfo> accessibleFunctions, Stack<Operation> operations, Type natRecType) {
+            this(expectedType, functionName, accessibleVariables, accessibleFunctions, operations, Optional.empty(), Optional.of(natRecType));
         }
+    }
 
-        public ExprVisitorArgs(Type expectedType, String functionName, Map<String, Type> accessibleVariables, ArrayList<FunctionInfo> accessibleFunctions, Type natRecType) {
-            this(expectedType, functionName, accessibleVariables, accessibleFunctions, Optional.empty(), Optional.empty(), Optional.of(natRecType));
-        }
+    public record MatchCaseVisitorArgs(
+            Type parentExprType,
+            Type expectedType,
+            Map<String, Type> accessibleVariables,
+            List<FunctionInfo> accessibleFunctions,
+            String functionName) {
+    }
+
+    public record PatternVisitorArgs(
+            Type parentExprType,
+            Map<String, Type> accessibleVariables,
+            List<FunctionInfo> accessibleFunctions,
+            String functionName) {
     }
 
     public record ParamDeclVisitorArgs(Optional<Type> expectedType, String functionName, List<FunctionParameter> params,
@@ -73,6 +84,9 @@ public class VisitTypeCheck {
     }
 
     private Optional<TypeCheckException> checkExprType(ExprVisitorArgs args, Type type) {
+        if (args.expectedType == null)
+            return Optional.empty();
+
         if ((type instanceof TypeTuple) && (args.expectedType instanceof TypeTuple)) {
             ListType expectedList = ((TypeTuple) args.expectedType).listtype_;
             ListType actualList = ((TypeTuple) type).listtype_;
@@ -241,11 +255,10 @@ public class VisitTypeCheck {
                     declaredReturnType,
                     functionName,
                     accessibleVariables,
-                    functions);
+                    functions,
+                    new Stack<>());
 
-            Optional<TypeCheckException> returnTypeException = acceptNullable(p.expr_, new ExprVisitor(), returnExprArgs);
-
-            return returnTypeException;
+            return acceptNullable(p.expr_, new ExprVisitor(), returnExprArgs);
             //return ReturnTypeMismatchException.returnTypeMismatch(declaredReturnType, returnExprType, functionName);
 
         }
@@ -395,6 +408,7 @@ public class VisitTypeCheck {
                             args.expectedType,
                             args.functionName,
                             null,
+                            null,
                             null),
                     p);
         }
@@ -421,11 +435,29 @@ public class VisitTypeCheck {
         }
     }
 
-    public class MatchCaseVisitor<R, A> implements org.syntax.stella.Absyn.MatchCase.Visitor<R, A> {
-        public R visit(org.syntax.stella.Absyn.AMatchCase p, A arg) { /* Code for AMatchCase goes here */
-            p.pattern_.accept(new PatternVisitor<R, A>(), arg);
-            //p.expr_.accept(new ExprVisitor<R,A>(), arg);
-            return null;
+    public class MatchCaseVisitor implements org.syntax.stella.Absyn.MatchCase.Visitor<Optional<TypeCheckException>, MatchCaseVisitorArgs> {
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.AMatchCase p, MatchCaseVisitorArgs args) { /* Code for AMatchCase goes here */
+            Type parentExprType = args.parentExprType;
+
+            PatternVisitorArgs patternArgs = new PatternVisitorArgs(
+                    parentExprType,
+                    new HashMap<>(args.accessibleVariables),
+                    args.accessibleFunctions,
+                    args.functionName
+            );
+            Optional<TypeCheckException> problem = p.pattern_.accept(new PatternVisitor(), patternArgs);
+            if (problem.isPresent())
+                return problem;
+            Map<String, Type> updatedAccessibleVariables = patternArgs.accessibleVariables;
+
+            ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                    args.expectedType,
+                    args.functionName,
+                    updatedAccessibleVariables,
+                    args.accessibleFunctions,
+                    new Stack<>()
+            );
+            return p.expr_.accept(new ExprVisitor(), newArgs);
         }
     }
 
@@ -446,7 +478,7 @@ public class VisitTypeCheck {
         }
 
         public R visit(org.syntax.stella.Absyn.SomePatternData p, A arg) { /* Code for SomePatternData goes here */
-            p.pattern_.accept(new PatternVisitor<R, A>(), arg);
+            //p.pattern_.accept(new PatternVisitor(), arg);
             return null;
         }
     }
@@ -462,82 +494,246 @@ public class VisitTypeCheck {
         }
     }
 
-    public class PatternVisitor<R, A> implements org.syntax.stella.Absyn.Pattern.Visitor<R, A> {
-        public R visit(org.syntax.stella.Absyn.PatternVariant p, A arg) { /* Code for PatternVariant goes here */
+    private Optional<FunctionInfo> getFunctionByName(List<FunctionInfo> accessibleFunctions, String identifier) {
+        return accessibleFunctions
+                .stream()
+                .filter(f -> f.name.equals(identifier))
+                .findFirst();
+    }
+
+    public enum OperationType {
+        APPLICATION,
+        DOT_TUPLE_CALL
+    }
+
+    public static abstract class Operation {
+        public OperationType type;
+
+        public Operation(OperationType type) {
+            this.type = type;
+        }
+    }
+
+    public static class DotTupleCall extends Operation {
+        private final int dotTupleInteger;
+
+        public DotTupleCall(int dotTupleInteger) {
+            super(OperationType.DOT_TUPLE_CALL);
+            this.dotTupleInteger = dotTupleInteger;
+        }
+
+        public int getDotTupleInteger() {
+            return dotTupleInteger;
+        }
+    }
+
+    public static class Application extends Operation {
+        private List<Expr> actualParams;
+
+        public Application(List<Expr> actualParams) {
+            super(OperationType.APPLICATION);
+            this.actualParams = actualParams;
+        }
+
+        public List<Expr> getActualParams() {
+            return actualParams;
+        }
+    }
+
+    // f(x).1(e)(r).2.1
+
+    private TypeSum getSumType(Expr expr,
+                               String functionName,
+                               Map<String, Type> accessibleVariables,
+                               List<FunctionInfo> accessibleFunctions,
+                               Stack<Operation> operations) throws TypeCheckException {
+        if (expr instanceof Var var) {
+            String identifier = var.stellaident_;
+
+            if (!operations.isEmpty()) {
+                Type returnType;
+                if (accessibleVariables.containsKey(identifier)) {
+                    returnType = accessibleVariables.get(identifier);
+                } else {
+                    Optional<FunctionInfo> calledFunctionOpt = getFunctionByName(accessibleFunctions, identifier);
+
+                    if (calledFunctionOpt.isPresent()) {
+                        returnType = calledFunctionOpt.get().returnType;
+                    } else {
+                        throw UnknownIdentifierException.unknownVariable(identifier, functionName);
+                    }
+                }
+
+                Operation operation = operations.pop();
+                if (operation instanceof DotTupleCall dotTupleCall) {
+                    if (returnType instanceof TypeTuple tuple) {
+                        returnType = tuple.listtype_.get(dotTupleCall.dotTupleInteger - 1);
+                    } else {
+                        throw IllegalExpressionException.nonTupleDotCall(functionName);
+                    }
+                }
+
+                while (!operations.isEmpty()) {
+                    operation = operations.pop();
+                    if (operation instanceof DotTupleCall dotTupleCall) {
+                        if (returnType instanceof TypeTuple tuple) {
+                            returnType = tuple.listtype_.get(dotTupleCall.dotTupleInteger - 1);
+                        } else {
+                            throw IllegalExpressionException.nonTupleDotCall(functionName);
+                        }
+                    } else {
+                        if (returnType instanceof TypeFun fun) {
+                            returnType = fun.type_;
+                        } else {
+                            throw IllegalExpressionException.paramsToNonFunction(functionName, identifier);
+                        }
+                    }
+                }
+
+                if (returnType instanceof TypeSum validType) {
+                    return validType;
+                } else {
+                    throw IllegalExpressionException.illegalExprInMatch(functionName, returnType);
+                }
+            } else {
+                if (accessibleVariables.containsKey(identifier)) {
+                    Type varType = accessibleVariables.get(identifier);
+                    if (varType instanceof TypeSum validType) {
+                        return validType;
+                    } else {
+                        throw IllegalExpressionException.illegalExprInMatch(functionName, varType);
+                    }
+                } else {
+                    Optional<FunctionInfo> calledFunctionOpt = getFunctionByName(accessibleFunctions, identifier);
+
+                    if (calledFunctionOpt.isPresent()) {
+                        Type funReturnType = calledFunctionOpt.get().returnType;
+                        if (funReturnType instanceof TypeSum validType) {
+                            return validType;
+                        } else {
+                            throw IllegalExpressionException.illegalExprInMatch(functionName, funReturnType);
+                        }
+                    } else {
+                        throw UnknownIdentifierException.unknownVariable(identifier, functionName);
+                    }
+                }
+            }
+        } else if (expr instanceof org.syntax.stella.Absyn.Application application) {
+            operations.push(new Application(null));
+            return getSumType(
+                    application.expr_,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else if (expr instanceof DotTuple dotTuple) {
+            operations.push(new DotTupleCall(dotTuple.integer_));
+            return getSumType(
+                    dotTuple.expr_,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else {
+            throw IllegalExpressionException.illegalExprInMatch(functionName, expr);
+        }
+    }
+
+    public class PatternVisitor implements org.syntax.stella.Absyn.Pattern.Visitor<Optional<TypeCheckException>, PatternVisitorArgs> {
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternVariant p, PatternVisitorArgs args) { /* Code for PatternVariant goes here */
             //p.stellaident_;
-            p.patterndata_.accept(new PatternDataVisitor<R, A>(), arg);
+            //p.patterndata_.accept(new PatternDataVisitor<R, A>(), arg);
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternInl p, A arg) { /* Code for PatternInl goes here */
-            p.pattern_.accept(new PatternVisitor<R, A>(), arg);
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternInl p, PatternVisitorArgs args) { /* Code for PatternInl goes here */
+            if (args.parentExprType instanceof TypeSum typeSum) {
+                PatternVisitorArgs newArgs = new PatternVisitorArgs(
+                        typeSum.type_1,
+                        args.accessibleVariables,
+                        args.accessibleFunctions,
+                        args.functionName
+                );
+                return p.pattern_.accept(new PatternVisitor(), newArgs);
+            } else {
+                return Optional.of(IllegalExpressionException.illegalTypeSumReference(args.functionName));
+            }
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternInr p, A arg) { /* Code for PatternInr goes here */
-            p.pattern_.accept(new PatternVisitor<R, A>(), arg);
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternInr p, PatternVisitorArgs args) { /* Code for PatternInr goes here */
+            if (args.parentExprType instanceof TypeSum typeSum) {
+                PatternVisitorArgs newArgs = new PatternVisitorArgs(
+                        typeSum.type_2,
+                        args.accessibleVariables,
+                        args.accessibleFunctions,
+                        args.functionName
+                );
+                return p.pattern_.accept(new PatternVisitor(), newArgs);
+            } else {
+                return Optional.of(IllegalExpressionException.illegalTypeSumReference(args.functionName));
+            }
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternTuple p, A arg) { /* Code for PatternTuple goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternTuple p, PatternVisitorArgs arg) { /* Code for PatternTuple goes here */
             for (org.syntax.stella.Absyn.Pattern x : p.listpattern_) {
-                x.accept(new PatternVisitor<R, A>(), arg);
+                //x.accept(new PatternVisitor<R, A>(), arg);
             }
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternRecord p, A arg) { /* Code for PatternRecord goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternRecord p, PatternVisitorArgs arg) { /* Code for PatternRecord goes here */
             for (org.syntax.stella.Absyn.LabelledPattern x : p.listlabelledpattern_) {
-                x.accept(new LabelledPatternVisitor<R, A>(), arg);
+                //x.accept(new LabelledPatternVisitor<R, A>(), arg);
             }
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternList p, A arg) { /* Code for PatternList goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternList p, PatternVisitorArgs arg) { /* Code for PatternList goes here */
             for (org.syntax.stella.Absyn.Pattern x : p.listpattern_) {
-                x.accept(new PatternVisitor<R, A>(), arg);
+                //x.accept(new PatternVisitor<R, A>(), arg);
             }
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternCons p, A arg) { /* Code for PatternCons goes here */
-            p.pattern_1.accept(new PatternVisitor<R, A>(), arg);
-            p.pattern_2.accept(new PatternVisitor<R, A>(), arg);
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternCons p, PatternVisitorArgs arg) { /* Code for PatternCons goes here */
+            //p.pattern_1.accept(new PatternVisitor<R, A>(), arg);
+            //p.pattern_2.accept(new PatternVisitor<R, A>(), arg);
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternFalse p, A arg) { /* Code for PatternFalse goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternFalse p, PatternVisitorArgs arg) { /* Code for PatternFalse goes here */
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternTrue p, A arg) { /* Code for PatternTrue goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternTrue p, PatternVisitorArgs arg) { /* Code for PatternTrue goes here */
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternUnit p, A arg) { /* Code for PatternUnit goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternUnit p, PatternVisitorArgs arg) { /* Code for PatternUnit goes here */
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternInt p, A arg) { /* Code for PatternInt goes here */
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternInt p, PatternVisitorArgs arg) { /* Code for PatternInt goes here */
             //p.integer_;
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternSucc p, A arg) { /* Code for PatternSucc goes here */
-            p.pattern_.accept(new PatternVisitor<R, A>(), arg);
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternSucc p, PatternVisitorArgs arg) { /* Code for PatternSucc goes here */
+            p.pattern_.accept(new PatternVisitor(), arg);
             return null;
         }
 
-        public R visit(org.syntax.stella.Absyn.PatternVar p, A arg) { /* Code for PatternVar goes here */
-            //p.stellaident_;
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.PatternVar p, PatternVisitorArgs args) { /* Code for PatternVar goes here */
+            if (!p.stellaident_.equals("_"))
+                args.accessibleVariables.put(p.stellaident_, args.parentExprType);
+            return Optional.empty();
         }
     }
 
     public class LabelledPatternVisitor<R, A> implements org.syntax.stella.Absyn.LabelledPattern.Visitor<R, A> {
         public R visit(org.syntax.stella.Absyn.ALabelledPattern p, A arg) { /* Code for ALabelledPattern goes here */
             //p.stellaident_;
-            p.pattern_.accept(new PatternVisitor<R, A>(), arg);
+            //p.pattern_.accept(new PatternVisitor<R, A>(), arg);
             return null;
         }
     }
@@ -567,7 +763,8 @@ public class VisitTypeCheck {
                     new TypeBool(),
                     args.functionName,
                     args.accessibleVariables,
-                    args.accessibleFunctions
+                    args.accessibleFunctions,
+                    new Stack<>()
             );
             Optional<TypeCheckException> wrongCond = acceptNullable(p.expr_1, new ExprVisitor(), conditionArgs);
             Optional<TypeCheckException> wrongArg1 = acceptNullable(p.expr_2, new ExprVisitor(), args);
@@ -690,7 +887,8 @@ public class VisitTypeCheck {
                     returnType,
                     args.functionName,
                     extendedVariables,
-                    args.accessibleFunctions
+                    args.accessibleFunctions,
+                    new Stack<>()
             );
 
             return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
@@ -702,12 +900,47 @@ public class VisitTypeCheck {
             return null;
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Match p, ExprVisitorArgs arg) { /* Code for Match goes here */
-            p.expr_.accept(new ExprVisitor(), arg);
-            for (org.syntax.stella.Absyn.MatchCase x : p.listmatchcase_) {
-                //x.accept(new MatchCaseVisitor<R,A>(), arg);
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Match p, ExprVisitorArgs args) { /* Code for Match goes here */
+            Expr parentExpr = p.expr_;
+
+            Optional<TypeCheckException> innerProblem = parentExpr.accept(
+                    new ExprVisitor(),
+                    new ExprVisitorArgs(
+                            null,
+                            args.functionName,
+                            args.accessibleVariables,
+                            args.accessibleFunctions,
+                            new Stack<>())
+            );
+            if (innerProblem.isPresent())
+                return innerProblem;
+
+            try {
+                TypeSum parentExprType = getSumType(
+                        parentExpr,
+                        args.functionName,
+                        args.accessibleVariables,
+                        args.accessibleFunctions,
+                        new Stack<>());
+
+                for (org.syntax.stella.Absyn.MatchCase matchCase : p.listmatchcase_) {
+
+                    MatchCaseVisitorArgs matchCaseArgs = new MatchCaseVisitorArgs(
+                            parentExprType,
+                            args.expectedType,
+                            args.accessibleVariables,
+                            args.accessibleFunctions,
+                            args.functionName
+                    );
+                    Optional<TypeCheckException> exceptionOptional = matchCase.accept(new MatchCaseVisitor(), matchCaseArgs);
+                    if (exceptionOptional.isPresent())
+                        return exceptionOptional;
+                }
+            } catch (TypeCheckException e) {
+                return Optional.of(e);
             }
-            return null;
+
+            return Optional.empty();
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.List p, ExprVisitorArgs arg) { /* Code for List goes here */
@@ -764,29 +997,11 @@ public class VisitTypeCheck {
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Application p, ExprVisitorArgs args) { /* Code for Application goes here */
             List<Expr> actualParameters = p.listexpr_;
 
-            if (!(p.expr_ instanceof Var) && !(p.expr_ instanceof Application)) {
+            if (!(p.expr_ instanceof Var) && !(p.expr_ instanceof org.syntax.stella.Absyn.Application) && !(p.expr_ instanceof org.syntax.stella.Absyn.DotTuple))
                 return Optional.of(IllegalExpressionException.paramsToNonFunction(args.functionName, p.expr_.getClass().getSimpleName()));
-            }
 
-            if (args.actualParams.isPresent()) {
-                List<Expr> list = new ArrayList<>();
-                list.addAll(actualParameters);
-                args.actualParams.get().add(list);
-
-                return p.expr_.accept(new ExprVisitor(), args);
-            } else {
-                List<List<Expr>> actualParamsStorage = new ArrayList<>();
-                actualParamsStorage.add(actualParameters);
-
-                ExprVisitorArgs newArgs = new ExprVisitorArgs(
-                        args.expectedType,
-                        args.functionName,
-                        args.accessibleVariables,
-                        args.accessibleFunctions,
-                        actualParamsStorage);
-
-                return p.expr_.accept(new ExprVisitor(), newArgs);
-            }
+            args.operations.add(new Application(actualParameters));
+            return p.expr_.accept(new ExprVisitor(), args);
         }
 
         @Override
@@ -803,37 +1018,8 @@ public class VisitTypeCheck {
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.DotTuple p, ExprVisitorArgs args) { /* Code for DotTuple goes here */
             int dotTupleInt = p.integer_;
 
-            if (dotTupleInt < 1 || dotTupleInt > 2) {
-                return Optional.of(IllegalExpressionException.pairOutOfBounds(args.functionName(), dotTupleInt));
-            } else {
-                if ((p.expr_ instanceof Tuple) ||
-                        (p.expr_ instanceof Var) ||
-                        (p.expr_ instanceof Application) ||
-                        (p.expr_ instanceof DotTuple)) {
-
-                    ListType tupleTypes = new ListType();
-
-                    if (dotTupleInt == 1) {
-                        tupleTypes.add(args.expectedType);
-                        tupleTypes.add(null);
-                    } else {
-                        tupleTypes.add(null);
-                        tupleTypes.add(args.expectedType);
-                    }
-
-                    Type typeTuple = new TypeTuple(tupleTypes);
-                    ExprVisitorArgs newArgs = new ExprVisitorArgs(
-                            typeTuple,
-                            args.functionName,
-                            args.accessibleVariables,
-                            args.accessibleFunctions
-                    );
-
-                    return p.expr_.accept(new ExprVisitor(), newArgs);
-                } else {
-                    return Optional.of(IllegalExpressionException.nonTupleDotCall(args.functionName));
-                }
-            }
+            args.operations.add(new DotTupleCall(dotTupleInt));
+            return p.expr_.accept(new ExprVisitor(), args);
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Tuple p, ExprVisitorArgs args) { /* Code for Tuple goes here */
@@ -847,23 +1033,33 @@ public class VisitTypeCheck {
                 return Optional.of(IllegalExpressionException.illegalTupleParamsCount(args.functionName, p.listexpr_.size()));
             }
 
-            if (args.expectedType instanceof TypeTuple) {
-                TypeTuple expectedTuple = (TypeTuple) args.expectedType;
-                for (int i = 0; i < p.listexpr_.size(); i++) {
-                    Type expectedType = expectedTuple.listtype_.get(i);
-                    ExprVisitorArgs memberArgs = new ExprVisitorArgs(
-                            expectedType,
-                            args.functionName,
-                            args.accessibleVariables,
-                            args.accessibleFunctions
-                    );
-                    Optional<TypeCheckException> result = acceptNullable(p.listexpr_.get(i), new ExprVisitor(), memberArgs);
-                    if (result.isPresent())
-                        return result;
-                }
+            Stack<Operation> operations = args.operations;
 
+            if (operations.isEmpty()) {
+                if (args.expectedType instanceof TypeTuple expectedTuple) {
+                    for (int i = 0; i < p.listexpr_.size(); i++) {
+                        Type expectedType = expectedTuple.listtype_.get(i);
+                        ExprVisitorArgs memberArgs = new ExprVisitorArgs(
+                                expectedType,
+                                args.functionName,
+                                args.accessibleVariables,
+                                args.accessibleFunctions,
+                                new Stack<>()
+                        );
+                        Optional<TypeCheckException> result = acceptNullable(p.listexpr_.get(i), new ExprVisitor(), memberArgs);
+                        if (result.isPresent())
+                            return result;
+                    }
+                } else {
+                    return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, typeTuple));
+                }
             } else {
-                return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, typeTuple));
+                if (operations.peek() instanceof DotTupleCall dotTupleCall) {
+                    operations.pop();
+                    return p.listexpr_.get(dotTupleCall.dotTupleInteger - 1).accept(this, args);
+                } else {
+                    return Optional.of(IllegalExpressionException.paramsToNonFunction(args.functionName, p));
+                }
             }
 
             return Optional.empty();
@@ -913,14 +1109,34 @@ public class VisitTypeCheck {
             return null;
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Inl p, ExprVisitorArgs arg) { /* Code for Inl goes here */
-            p.expr_.accept(new ExprVisitor(), arg);
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Inl p, ExprVisitorArgs args) { /* Code for Inl goes here */
+            if (args.expectedType instanceof TypeSum) {
+                ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                        ((TypeSum) args.expectedType).type_1,
+                        args.functionName,
+                        args.accessibleVariables,
+                        args.accessibleFunctions,
+                        new Stack<>()
+                );
+                return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
+            } else {
+                return Optional.of(IllegalExpressionException.illegalTypeSumReference(args.functionName));
+            }
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Inr p, ExprVisitorArgs arg) { /* Code for Inr goes here */
-            p.expr_.accept(new ExprVisitor(), arg);
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Inr p, ExprVisitorArgs args) { /* Code for Inr goes here */
+            if (args.expectedType instanceof TypeSum) {
+                ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                        ((TypeSum) args.expectedType).type_2,
+                        args.functionName,
+                        args.accessibleVariables,
+                        args.accessibleFunctions,
+                        new Stack<>()
+                );
+                return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
+            } else {
+                return Optional.of(IllegalExpressionException.illegalTypeSumReference(args.functionName));
+            }
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Succ p, ExprVisitorArgs args) { /* Code for Succ goes here */
@@ -929,10 +1145,10 @@ public class VisitTypeCheck {
             String functionName = p.getClass().getSimpleName();
 
             if (!args.expectedType.equals(typeNat)) {
-                return Optional.of(TypeMismatchException.invalidArgumentType(args.functionName, functionName, args.expectedType, typeNat));
+                return Optional.of(TypeMismatchException.invalidArgumentType(args.functionName, functionName, typeNat, args.expectedType));
             }
 
-            Optional<TypeCheckException> exprTypeException = checkExprType(args, typeNat); // TODO: use checkExpr type here and everywhere
+            Optional<TypeCheckException> exprTypeException = checkExprType(args, typeNat);
             if (exprTypeException.isPresent())
                 return exprTypeException;
 
@@ -941,6 +1157,7 @@ public class VisitTypeCheck {
                     args.functionName,
                     args.accessibleVariables,
                     args.accessibleFunctions,
+                    new Stack<>(),
                     functionName);
 
             return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
@@ -972,6 +1189,7 @@ public class VisitTypeCheck {
                     args.functionName,
                     args.accessibleVariables,
                     args.accessibleFunctions,
+                    new Stack<>(),
                     "Nat::rec"
             );
 
@@ -980,6 +1198,7 @@ public class VisitTypeCheck {
                     args.functionName,
                     args.accessibleVariables,
                     args.accessibleFunctions,
+                    new Stack<>(),
                     "Nat::rec"
             );
 
@@ -998,6 +1217,7 @@ public class VisitTypeCheck {
                     args.functionName,
                     args.accessibleVariables,
                     args.accessibleFunctions,
+                    new Stack<>(),
                     "Nat::rec"
             );
 
@@ -1064,6 +1284,7 @@ public class VisitTypeCheck {
                         args.functionName,
                         args.accessibleVariables,
                         args.accessibleFunctions,
+                        new Stack<>(),
                         identifier
                 );
                 Optional<TypeCheckException> result = actualParams.get(j).accept(new ExprVisitor(), argsForParameter);
@@ -1074,39 +1295,38 @@ public class VisitTypeCheck {
             return Optional.empty();
         }
 
-        private Optional<TypeCheckException> checkAppliedFunction(String identifier, Type returnType, List<Type> paramTypes, ExprVisitorArgs args) {
+        private Optional<TypeCheckException> checkAppliedOperations(String identifier, Type returnType, ExprVisitorArgs args) {
+            Stack<Operation> operations = args.operations;
 
-            if (args.actualParams == null || args.actualParams.isEmpty() || args.actualParams.get().isEmpty()) {
-                ListType params = new ListType();
-                params.addAll(paramTypes);
-                return checkExprType(args, new TypeFun(params, returnType));
-            }
+            Type currentReturnType = returnType;
 
-            List<List<Expr>> paramsStorage = args.actualParams.get();
+            if (operations.isEmpty())
+                return checkExprType(args, returnType);
 
-            List<Type> currentParamTypes;
-            Type currentReturnType = null;
+            while (!operations.isEmpty()) {
+                Operation operation = operations.pop();
 
-            for (int i = paramsStorage.size() - 1; i >= 0; i--) {
-                List<Expr> actualParams = paramsStorage.get(i);
-
-                if (i == paramsStorage.size() - 1) {
-                    Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, paramTypes, actualParams, args);
-                    if (result.isPresent())
-                        return result;
-
-                    currentReturnType = returnType;
-                } else {
+                if (operation instanceof Application application) {
                     if (currentReturnType instanceof TypeFun typeFun) {
-                        currentParamTypes = typeFun.listtype_;
+                        Optional<TypeCheckException> result = checkParamsInAppliedFunction(
+                                identifier,
+                                typeFun.listtype_,
+                                application.actualParams,
+                                args);
+                        if (result.isPresent())
+                            return result;
+
                         currentReturnType = typeFun.type_;
                     } else {
-                        return Optional.of(TypeMismatchException.wrongType(args.functionName, new TypeFun(null, null), currentReturnType));
+                        return Optional.of(IllegalExpressionException.paramsToNonFunction(args.functionName, identifier));
                     }
-
-                    Optional<TypeCheckException> result = checkParamsInAppliedFunction(identifier, currentParamTypes, actualParams, args);
-                    if (result.isPresent())
-                        return result;
+                } else {
+                    DotTupleCall dotTupleCall = (DotTupleCall) operation;
+                    if (currentReturnType instanceof TypeTuple typeTuple) {
+                        currentReturnType = typeTuple.listtype_.get(dotTupleCall.dotTupleInteger - 1);
+                    } else {
+                        return Optional.of(IllegalExpressionException.nonTupleDotCall(args.functionName));
+                    }
                 }
             }
 
@@ -1118,26 +1338,18 @@ public class VisitTypeCheck {
 
             if (args.accessibleVariables.containsKey(identifier)) {
                 Type variableType = args.accessibleVariables.get(identifier);
-                if (variableType instanceof TypeFun) {
-                    TypeFun typeFun = (TypeFun) variableType;
-                    Type returnType = typeFun.type_;
-                    List<Type> paramTypes = typeFun.listtype_;
-                    return checkAppliedFunction(identifier, returnType, paramTypes, args);
-
-                } else {
-                    if (args.actualParams.isPresent())
-                        return Optional.of(IllegalExpressionException.paramsToNonFunction(args.functionName, identifier));
-                    return checkExprType(args, variableType);
-                }
+                return checkAppliedOperations(identifier, variableType, args);
             } else {
-                Optional<FunctionInfo> appliedFunctionOpt = args.accessibleFunctions.stream().filter(f -> f.name.equals(identifier)).findFirst();
+                Optional<FunctionInfo> appliedFunctionOpt = getFunctionByName(args.accessibleFunctions, identifier);
                 if (appliedFunctionOpt.isPresent()) {
                     FunctionInfo appliedFunction = appliedFunctionOpt.get();
 
-                    return checkAppliedFunction(
+                    ListType params = new ListType();
+                    params.addAll(appliedFunction.params.stream().map(param -> param.type).toList());
+
+                    return checkAppliedOperations(
                             identifier,
-                            appliedFunction.returnType,
-                            appliedFunction.params.stream().map(param -> param.type).toList(),
+                            new TypeFun(params, appliedFunction.returnType),
                             args);
                 } else {
                     return Optional.of(UnknownIdentifierException.unknownVariable(identifier, args.functionName));
@@ -1148,7 +1360,7 @@ public class VisitTypeCheck {
 
     public class PatternBindingVisitor<R, A> implements org.syntax.stella.Absyn.PatternBinding.Visitor<R, A> {
         public R visit(org.syntax.stella.Absyn.APatternBinding p, A arg) { /* Code for APatternBinding goes here */
-            p.pattern_.accept(new PatternVisitor<R, A>(), arg);
+            //p.pattern_.accept(new PatternVisitor<R, A>(), arg);
             //p.expr_.accept(new ExprVisitor<R,A>(), arg);
             return null;
         }

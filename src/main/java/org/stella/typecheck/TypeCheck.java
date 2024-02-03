@@ -6,10 +6,8 @@ import org.stella.typecheck.VisitTypeCheck;
 
 import java.util.Optional;
 
-public class TypeCheck
-{
-    public static void typecheckProgram(Program program) throws Exception
-    {
+public class TypeCheck {
+    public static void typecheckProgram(Program program) throws Exception {
         VisitTypeCheck v = new VisitTypeCheck();
         Optional<TypeCheckException> result = program.accept(v.new ProgramVisitor<>(), null /* initial context information*/);
 
