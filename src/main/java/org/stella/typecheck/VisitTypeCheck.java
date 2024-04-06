@@ -413,8 +413,11 @@ public class VisitTypeCheck {
                     p);
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.TypeUnit p, TypeVisitorArgs arg) { /* Code for TypeUnit goes here */
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.TypeUnit p, TypeVisitorArgs args) { /* Code for TypeUnit goes here */
+            if (!p.equals(args.expectedType))
+                return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, p));
+
+            return Optional.empty();
         }
 
         public Optional<TypeCheckException> visit(TypeTop p, TypeVisitorArgs arg) {
@@ -542,6 +545,141 @@ public class VisitTypeCheck {
 
     // f(x).1(e)(r).2.1
 
+    private Type getType(Expr expr,
+                         String functionName,
+                         Map<String, Type> accessibleVariables,
+                         List<FunctionInfo> accessibleFunctions,
+                         Stack<Operation> operations) throws TypeCheckException {
+        if (expr instanceof Var var) {
+            String identifier = var.stellaident_;
+
+            if (!operations.isEmpty()) {
+                Type returnType;
+                if (accessibleVariables.containsKey(identifier)) {
+                    returnType = accessibleVariables.get(identifier);
+                } else {
+                    Optional<FunctionInfo> calledFunctionOpt = getFunctionByName(accessibleFunctions, identifier);
+
+                    if (calledFunctionOpt.isPresent()) {
+                        returnType = calledFunctionOpt.get().returnType;
+                    } else {
+                        throw UnknownIdentifierException.unknownVariable(identifier, functionName);
+                    }
+                }
+
+                Operation operation;
+
+                while (!operations.isEmpty()) {
+                    operation = operations.pop();
+                    if (operation instanceof DotTupleCall dotTupleCall) {
+                        if (returnType instanceof TypeTuple tuple) {
+                            returnType = tuple.listtype_.get(dotTupleCall.dotTupleInteger - 1);
+                        } else {
+                            throw IllegalExpressionException.nonTupleDotCall(functionName);
+                        }
+                    } else {
+                        if (returnType instanceof TypeFun fun) {
+                            returnType = fun.type_;
+                        } else {
+                            throw IllegalExpressionException.paramsToNonFunction(functionName, identifier);
+                        }
+                    }
+                }
+
+                return returnType;
+            } else {
+                if (accessibleVariables.containsKey(identifier)) {
+                    return accessibleVariables.get(identifier);
+                } else {
+                    Optional<FunctionInfo> calledFunctionOpt = getFunctionByName(accessibleFunctions, identifier);
+
+                    if (calledFunctionOpt.isPresent()) {
+                        return calledFunctionOpt.get().returnType;
+                    } else {
+                        throw UnknownIdentifierException.unknownVariable(identifier, functionName);
+                    }
+                }
+            }
+        } else if (expr instanceof org.syntax.stella.Absyn.Application application) {
+            operations.push(new Application(null));
+            return getType(
+                    application.expr_,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else if (expr instanceof DotTuple dotTuple) {
+            operations.push(new DotTupleCall(dotTuple.integer_));
+            return getType(
+                    dotTuple.expr_,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else if (expr instanceof IsZero) {
+            return new TypeBool();
+        } else if (expr instanceof ConstUnit) {
+            return new TypeUnit();
+        } else if (expr instanceof ConstInt) {
+            return new TypeNat();
+        } else if (expr instanceof Succ) {
+            return new TypeNat();
+        } else if (expr instanceof Abstraction abstraction) {
+            List<FunctionParameter> params = new ArrayList<>();
+            for (ParamDecl param : abstraction.listparamdecl_) {
+                ParamDeclVisitorArgs paramArgs = new ParamDeclVisitorArgs(
+                        "anonymous function",
+                        params,
+                        accessibleFunctions.stream().map(f -> f.name).toList(),
+                        true
+                );
+                param.accept(new ParamDeclVisitor(), paramArgs);
+            }
+
+            ListType paramTypes = new ListType();
+            paramTypes.addAll(params.stream().map(p -> p.type).toList());
+
+            return new TypeFun(
+                    paramTypes,
+                    getType(
+                            abstraction.expr_,
+                            functionName,
+                            accessibleVariables,
+                            accessibleFunctions,
+                            operations));
+        } else if (expr instanceof NatRec natRec) {
+            return getType(natRec.expr_2,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else if (expr instanceof ConstTrue) {
+            return new TypeBool();
+        } else if (expr instanceof ConstFalse) {
+            return new TypeBool();
+        } else if (expr instanceof If ifExpr) {
+            return getType(ifExpr.expr_2,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else if (expr instanceof Inl inl) {
+            return getType(inl.expr_,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else if (expr instanceof Inr inr) {
+            return getType(inr.expr_,
+                    functionName,
+                    accessibleVariables,
+                    accessibleFunctions,
+                    operations);
+        } else {
+            throw IllegalExpressionException.illegalExprInMatch(functionName, expr);
+        }
+    }
+
     private TypeSum getSumType(Expr expr,
                                String functionName,
                                Map<String, Type> accessibleVariables,
@@ -564,14 +702,7 @@ public class VisitTypeCheck {
                     }
                 }
 
-                Operation operation = operations.pop();
-                if (operation instanceof DotTupleCall dotTupleCall) {
-                    if (returnType instanceof TypeTuple tuple) {
-                        returnType = tuple.listtype_.get(dotTupleCall.dotTupleInteger - 1);
-                    } else {
-                        throw IllegalExpressionException.nonTupleDotCall(functionName);
-                    }
-                }
+                Operation operation;
 
                 while (!operations.isEmpty()) {
                     operation = operations.pop();
@@ -849,49 +980,75 @@ public class VisitTypeCheck {
             if (p.listparamdecl_.size() != 1)
                 return Optional.of(FunctionDeclarationException.illegalParamsCount(args.functionName, p.listparamdecl_.size(), true));
 
-            if (!(args.expectedType instanceof TypeFun)) {
-                return Optional.of(TypeMismatchException.unexpectedAbstraction(args.functionName, args.expectedType));
+            List<Type> expectedParamTypes = null;
+            if (args.expectedType instanceof TypeFun expectedType) {
+                expectedParamTypes = expectedType.listtype_;
             }
 
-            TypeFun expectedType = (TypeFun) args.expectedType;
+            List<FunctionParameter> params = new ArrayList<>();
 
-            List<Type> expectedParamTypes = expectedType.listtype_;
-
-            List<FunctionParameter> accessibleParams = new ArrayList<>(args
-                    .accessibleVariables
-                    .entrySet()
-                    .stream()
-                    .map(entry -> new FunctionParameter(entry.getKey(), entry.getValue()))
-                    .toList());
             for (int i = 0; i < p.listparamdecl_.size(); i++) {
+                int finalI = i;
                 Optional<TypeCheckException> paramResult = p.listparamdecl_.get(i).accept(new ParamDeclVisitor(), new ParamDeclVisitorArgs(
-                        Optional.of(expectedParamTypes.get(i)),
+                        Optional.ofNullable(expectedParamTypes).map(t -> t.get(finalI)),
                         args.functionName,
-                        accessibleParams,
+                        params,
                         args.accessibleFunctions.stream().map(f -> f.name).toList(),
                         true));
                 if (paramResult.isPresent())
                     return paramResult;
             }
 
-            Type returnType = expectedType.type_;
-            Map<String, Type> extendedVariables = new HashMap<>(args.accessibleVariables);
-            extendedVariables.putAll(
-                    accessibleParams
-                            .stream()
-                            .collect(
-                                    Collectors.toMap(param -> param.identifier, param -> param.type)
-                            )
-            );
-            ExprVisitorArgs newArgs = new ExprVisitorArgs(
-                    returnType,
-                    args.functionName,
-                    extendedVariables,
-                    args.accessibleFunctions,
-                    new Stack<>()
-            );
+            for (FunctionParameter param : params) {
+                if (args.accessibleVariables.keySet().stream().anyMatch(id -> id.equals(param.identifier)))
+                    return Optional.of(FunctionDeclarationException.paramNameDuplicate(param.identifier, args.functionName, true));
+            }
 
-            return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
+            if (!args.operations.isEmpty()) {
+                List<FunctionParameter> parameters = new ArrayList<>();
+                for (int i = 0; i < p.listparamdecl_.size(); i++) {
+                    p.listparamdecl_.get(i).accept(new ParamDeclVisitor(), new ParamDeclVisitorArgs(
+                            args.functionName,
+                            parameters,
+                            args.accessibleFunctions.stream().map(f -> f.name).toList(),
+                            true));
+                }
+
+                ListType paramTypes = new ListType();
+                paramTypes.addAll(parameters.stream().map(param -> param.type).toList());
+
+                try {
+                    Type returnType = getType(p.expr_, args.functionName, args.accessibleVariables, args.accessibleFunctions, args.operations);
+
+                    return checkAppliedOperations(
+                            "anonymous function",
+                            new TypeFun(paramTypes, returnType),
+                            args);
+                } catch (TypeCheckException e) {
+                    return Optional.of(e);
+                }
+            } else if (args.expectedType instanceof TypeFun expectedType) {
+                Type returnType = expectedType.type_;
+                Map<String, Type> extendedVariables = new HashMap<>(args.accessibleVariables);
+                extendedVariables.putAll(
+                        params
+                                .stream()
+                                .collect(
+                                        Collectors.toMap(param -> param.identifier, param -> param.type)
+                                )
+                );
+                ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                        returnType,
+                        args.functionName,
+                        extendedVariables,
+                        args.accessibleFunctions,
+                        new Stack<>()
+                );
+
+                return acceptNullable(p.expr_, new ExprVisitor(), newArgs);
+            } else {
+                return Optional.of(TypeMismatchException.unexpectedAbstraction(args.functionName, args.expectedType));
+            }
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Variant p, ExprVisitorArgs arg) { /* Code for Variant goes here */
@@ -997,7 +1154,7 @@ public class VisitTypeCheck {
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Application p, ExprVisitorArgs args) { /* Code for Application goes here */
             List<Expr> actualParameters = p.listexpr_;
 
-            if (!(p.expr_ instanceof Var) && !(p.expr_ instanceof org.syntax.stella.Absyn.Application) && !(p.expr_ instanceof org.syntax.stella.Absyn.DotTuple))
+            if (!(p.expr_ instanceof Var) && !(p.expr_ instanceof org.syntax.stella.Absyn.Application) && !(p.expr_ instanceof org.syntax.stella.Absyn.DotTuple) && !(p.expr_ instanceof org.syntax.stella.Absyn.Abstraction))
                 return Optional.of(IllegalExpressionException.paramsToNonFunction(args.functionName, p.expr_.getClass().getSimpleName()));
 
             args.operations.add(new Application(actualParameters));
@@ -1173,9 +1330,20 @@ public class VisitTypeCheck {
             return null;
         }
 
-        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.IsZero p, ExprVisitorArgs arg) { /* Code for IsZero goes here */
-            p.expr_.accept(new ExprVisitor(), arg);
-            return null;
+        public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.IsZero p, ExprVisitorArgs args) { /* Code for IsZero goes here */
+
+            ExprVisitorArgs newArgs = new ExprVisitorArgs(
+                    new TypeNat(),
+                    args.functionName,
+                    args.accessibleVariables,
+                    args.accessibleFunctions,
+                    args.operations
+            );
+
+            if (!(args.expectedType instanceof TypeBool))
+                return Optional.of(TypeMismatchException.wrongType(args.functionName, args.expectedType, new TypeBool()));
+
+            return p.expr_.accept(new ExprVisitor(), newArgs);
         }
 
         public Optional<TypeCheckException> visit(org.syntax.stella.Absyn.Fix p, ExprVisitorArgs arg) { /* Code for Fix goes here */

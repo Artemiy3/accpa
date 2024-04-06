@@ -76,6 +76,7 @@ public class Main {
         } catch (TypeCheckException e) {
             System.err.println(e.getMessage());
             //e.printStackTrace();
+            //throw e;
             System.exit(2);
         }
 
